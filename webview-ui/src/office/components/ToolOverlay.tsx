@@ -9,6 +9,7 @@ interface ToolOverlayProps {
   officeState: OfficeState
   agents: number[]
   agentTools: Record<number, ToolActivity[]>
+  agentStatuses: Record<number, string>
   subagentCharacters: SubagentCharacter[]
   containerRef: React.RefObject<HTMLDivElement | null>
   zoom: number
@@ -21,6 +22,7 @@ function getActivityText(
   agentId: number,
   agentTools: Record<number, ToolActivity[]>,
   isActive: boolean,
+  agentStatus: string | undefined,
 ): string {
   const tools = agentTools[agentId]
   if (tools && tools.length > 0) {
@@ -37,6 +39,7 @@ function getActivityText(
     }
   }
 
+  if (agentStatus === 'waiting') return 'Done ✓'
   return isActive ? 'Thinking…' : 'Idle'
 }
 
@@ -44,6 +47,7 @@ export function ToolOverlay({
   officeState,
   agents,
   agentTools,
+  agentStatuses,
   subagentCharacters,
   containerRef,
   zoom,
@@ -108,7 +112,7 @@ export function ToolOverlay({
             activityText = sub ? sub.label : 'Subtask'
           }
         } else {
-          activityText = getActivityText(id, agentTools, ch.isActive)
+          activityText = getActivityText(id, agentTools, ch.isActive, agentStatuses[id])
         }
 
         // Determine dot color
@@ -116,12 +120,15 @@ export function ToolOverlay({
         const hasPermission = subHasPermission || tools?.some((t) => t.permissionWait && !t.done)
         const hasActiveTools = tools?.some((t) => !t.done)
         const isActive = ch.isActive
+        const isDone = agentStatuses[id] === 'waiting'
 
         let dotColor: string | null = null
         if (hasPermission) {
           dotColor = 'var(--pixel-status-permission)'
         } else if (isActive && hasActiveTools) {
           dotColor = 'var(--pixel-status-active)'
+        } else if (isDone) {
+          dotColor = 'var(--vscode-charts-yellow, #cca700)'
         }
 
         return (

@@ -418,6 +418,11 @@ export function processCopilotTranscriptLine(
 			case 'tool.execution_start': {
 				const { toolCallId, toolName = '', arguments: args = {} } = data;
 				if (!toolCallId) break;
+				// Announce passive agent if a tool fires before we saw user.message
+				if (!agent.announcedToWebview) {
+					webview?.postMessage({ type: 'agentCreated', id: agentId });
+					agent.announcedToWebview = true;
+				}
 				cancelWaitingTimer(agentId, waitingTimers);
 				agent.isWaiting = false;
 				agent.hadToolsInTurn = true;
