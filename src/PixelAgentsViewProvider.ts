@@ -127,7 +127,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 				}
 
 				// Ensure Copilot session scan is running
-				const sessionsDir = getCopilotSessionsDir();
+				const sessionsDir = getCopilotSessionsDir(this.context.storageUri);
 				const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 				console.log('[Extension] workspaceRoot:', workspaceRoot);
 				console.log('[Extension] sessionsDir:', sessionsDir);
@@ -212,7 +212,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
 				sendExistingAgents(this.agents, this.context, this.webview);
 			} else if (message.type === 'openSessionsFolder') {
-				const sessionsDir = getCopilotSessionsDir();
+				const sessionsDir = getCopilotSessionsDir(this.context.storageUri);
 				if (sessionsDir && fs.existsSync(sessionsDir)) {
 					vscode.env.openExternal(vscode.Uri.file(sessionsDir));
 				}

@@ -3,7 +3,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { AgentState } from './types.js';
 import { cancelWaitingTimer, cancelPermissionTimer, clearAgentActivity } from './timerManager.js';
-import { processCopilotSession } from './copilotSessionParser.js';
+import { processCopilotSession, processCopilotTranscriptLine } from './copilotSessionParser.js';
 import { FILE_WATCHER_POLL_INTERVAL_MS, PROJECT_SCAN_INTERVAL_MS, JSONL_POLL_INTERVAL_MS } from './constants.js';
 
 export function startFileWatching(
@@ -48,8 +48,8 @@ export function startFileWatching(
 }
 
 /**
- * Read the Copilot chat session JSON file and process any new content.
- * Unlike JSONL, the entire file is re-read each time (the file is fully rewritten by VS Code).
+ * Read the Copilot chat session file and process any new content.
+ * Supports both the new JSONL transcript format and the legacy JSON format.
  */
 export function readSessionFile(
 	agentId: number,
@@ -63,7 +63,18 @@ export function readSessionFile(
 	try {
 		const raw = fs.readFileSync(agent.sessionFile, 'utf-8');
 		if (!raw.trim()) return;
-		processCopilotSession(agentId, raw, agents, waitingTimers, permissionTimers, webview);
+		if (agent.sessionFile.endsWith('.jsonl')) {
+			// New JSONL transcript format — process only newly appended lines
+			const lines = raw.split('\n').filter(l => l.trim());
+			const startIdx = agent.lastLineIndex;
+			for (let i = startIdx; i < lines.length; i++) {
+				processCopilotTranscriptLine(agentId, lines[i], agents, waitingTimers, permissionTimers, webview);
+			}
+			agent.lastLineIndex = lines.length;
+		} else {
+			// Legacy JSON format
+			processCopilotSession(agentId, raw, agents, waitingTimers, permissionTimers, webview);
+		}
 	} catch (e) {
 		console.log(`[Pixel Agents] Read error for agent ${agentId}: ${e}`);
 	}
@@ -84,13 +95,26 @@ export function ensureCopilotSessionScan(
 ): void {
 	if (projectScanTimerRef.current) return;
 
-	// Seed known files so we don't re-process existing sessions
+	// Seed old files as known, but adopt recently-active sessions as agents
+	const RECENT_SESSION_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+	const now = Date.now();
 	try {
 		const files = fs.readdirSync(sessionsDir)
-			.filter(f => f.endsWith('.json'))
+			.filter(f => f.endsWith('.jsonl') || f.endsWith('.json'))
 			.map(f => path.join(sessionsDir, f));
 		for (const f of files) {
 			knownSessionFiles.add(f);
+			// Adopt sessions that were active in the last 24h as live agents
+			try {
+				const mtime = fs.statSync(f).mtimeMs;
+				if (now - mtime < RECENT_SESSION_THRESHOLD_MS) {
+					adoptSessionFile(
+						f, sessionsDir, nextAgentIdRef,
+						agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers,
+						webview, persistAgents,
+					);
+				}
+			} catch { /* ignore stat errors */ }
 		}
 	} catch { /* dir may not exist yet */ }
 
@@ -118,7 +142,7 @@ function scanForNewSessionFiles(
 	let files: string[];
 	try {
 		files = fs.readdirSync(sessionsDir)
-			.filter(f => f.endsWith('.json'))
+			.filter(f => f.endsWith('.jsonl') || f.endsWith('.json'))
 			.map(f => path.join(sessionsDir, f));
 	} catch { return; }
 
@@ -154,6 +178,7 @@ function adoptSessionFile(
 		sessionsDir,
 		lastRequestCount: 0,
 		lastResponseChunkCount: 0,
+		lastLineIndex: 0,
 		activeToolIds: new Set(),
 		activeToolStatuses: new Map(),
 		activeToolNames: new Map(),

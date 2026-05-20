@@ -9,6 +9,8 @@ export interface AgentState {
 	/** Last read state for diffing the JSON file */
 	lastRequestCount: number;
 	lastResponseChunkCount: number;
+	/** Last processed line index for JSONL files */
+	lastLineIndex: number;
 	activeToolIds: Set<string>;
 	activeToolStatuses: Map<string, string>;
 	activeToolNames: Map<string, string>;

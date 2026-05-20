@@ -333,3 +333,128 @@ function processSubagentRequest(
 		}
 	}
 }
+
+// ── New Copilot transcript JSONL format (VS Code 1.109+) ──────
+
+const NEW_FORMAT_PERMISSION_EXEMPT = new Set(['vscode_askQuestions']);
+
+/**
+ * Format a tool name + arguments from the new transcript JSONL format into a human-readable status.
+ */
+function formatNewCopilotTool(toolName: string, args: Record<string, unknown>): string {
+	const filePath = ((args.filePath ?? args.path ?? args.file_path ?? '') as string);
+	const baseName = filePath ? path.basename(filePath) : '';
+	switch (toolName) {
+		case 'read_file': return baseName ? `Reading ${baseName}` : 'Reading file';
+		case 'create_file': return baseName ? `Writing ${baseName}` : 'Writing file';
+		case 'replace_string_in_file':
+		case 'multi_replace_string_in_file': return baseName ? `Editing ${baseName}` : 'Editing file';
+		case 'grep_search':
+		case 'semantic_search': return 'Searching code';
+		case 'file_search': return 'Searching files';
+		case 'list_dir': return 'Listing files';
+		case 'run_in_terminal': {
+			const cmd = (args.command as string) || '';
+			return `Running: ${cmd.length > BASH_COMMAND_DISPLAY_MAX_LENGTH ? cmd.slice(0, BASH_COMMAND_DISPLAY_MAX_LENGTH) + '\u2026' : cmd}`;
+		}
+		case 'get_errors': return 'Checking errors';
+		case 'vscode_askQuestions': return 'Waiting for your answer';
+		case 'memory': return 'Accessing memory';
+		default: return `Using ${toolName}`;
+	}
+}
+
+/**
+ * Process a single line from the new Copilot transcript JSONL format.
+ * Events: session.start, assistant.turn_start, tool.execution_start,
+ *         tool.execution_complete, assistant.message, assistant.turn_end, user.message
+ */
+export function processCopilotTranscriptLine(
+	agentId: number,
+	line: string,
+	agents: Map<number, AgentState>,
+	waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+	webview: vscode.Webview | undefined,
+): void {
+	const agent = agents.get(agentId);
+	if (!agent) return;
+	try {
+		const record = JSON.parse(line) as {
+			type: string;
+			data?: {
+				toolCallId?: string;
+				toolName?: string;
+				arguments?: Record<string, unknown>;
+				success?: boolean;
+				turnId?: string;
+			};
+		};
+		const data = record.data ?? {};
+
+		switch (record.type) {
+			case 'user.message': {
+				// New user prompt — reset turn state
+				cancelWaitingTimer(agentId, waitingTimers);
+				clearAgentActivity(agent, agentId, permissionTimers, webview);
+				agent.hadToolsInTurn = false;
+				break;
+			}
+			case 'assistant.turn_start': {
+				cancelWaitingTimer(agentId, waitingTimers);
+				agent.isWaiting = false;
+				webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });
+				break;
+			}
+			case 'tool.execution_start': {
+				const { toolCallId, toolName = '', arguments: args = {} } = data;
+				if (!toolCallId) break;
+				cancelWaitingTimer(agentId, waitingTimers);
+				agent.isWaiting = false;
+				agent.hadToolsInTurn = true;
+				const status = formatNewCopilotTool(toolName, args as Record<string, unknown>);
+				agent.activeToolIds.add(toolCallId);
+				agent.activeToolStatuses.set(toolCallId, status);
+				agent.activeToolNames.set(toolCallId, toolName);
+				webview?.postMessage({ type: 'agentToolStart', id: agentId, toolId: toolCallId, status });
+				if (!NEW_FORMAT_PERMISSION_EXEMPT.has(toolName)) {
+					startPermissionTimer(agentId, agents, permissionTimers, NEW_FORMAT_PERMISSION_EXEMPT, webview);
+				}
+				break;
+			}
+			case 'tool.execution_complete': {
+				const { toolCallId } = data;
+				if (!toolCallId) break;
+				agent.activeToolIds.delete(toolCallId);
+				agent.activeToolStatuses.delete(toolCallId);
+				agent.activeToolNames.delete(toolCallId);
+				const tid = toolCallId;
+				setTimeout(() => {
+					webview?.postMessage({ type: 'agentToolDone', id: agentId, toolId: tid });
+				}, TOOL_DONE_DELAY_MS);
+				if (agent.activeToolIds.size === 0) {
+					agent.hadToolsInTurn = false;
+				}
+				break;
+			}
+			case 'assistant.turn_end': {
+				// Definitive turn end — agent is now waiting for user
+				cancelWaitingTimer(agentId, waitingTimers);
+				cancelPermissionTimer(agentId, permissionTimers);
+				if (agent.activeToolIds.size > 0) {
+					agent.activeToolIds.clear();
+					agent.activeToolStatuses.clear();
+					agent.activeToolNames.clear();
+					webview?.postMessage({ type: 'agentToolsClear', id: agentId });
+				}
+				agent.isWaiting = true;
+				agent.permissionSent = false;
+				agent.hadToolsInTurn = false;
+				webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'waiting' });
+				break;
+			}
+		}
+	} catch {
+		// Ignore malformed lines
+	}
+}

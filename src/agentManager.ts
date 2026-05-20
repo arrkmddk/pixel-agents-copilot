@@ -9,48 +9,106 @@ import { JSONL_POLL_INTERVAL_MS, AGENT_NAME_PREFIX, WORKSPACE_KEY_AGENTS, WORKSP
 import { migrateAndLoadLayout } from './layoutPersistence.js';
 
 /**
- * Find the VS Code workspaceStorage chatSessions directory for the current workspace.
- * VS Code hashes the workspace URI to produce the storage folder name.
- * We scan all workspaceStorage entries until we find one whose workspace.json matches.
+ * Find the VS Code workspaceStorage Copilot transcripts directory.
+ *
+ * Accepts either:
+ *  - A VS Code Uri (context.storageUri) — most reliable, works on VS Code Server
+ *  - A workspace folder path string — falls back to scanning workspaceStorage entries
  */
-export function getCopilotSessionsDir(cwd?: string): string | null {
-	const workspacePath = cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-	if (!workspacePath) return null;
+export function getCopilotSessionsDir(cwdOrStorageUri?: string | vscode.Uri): string | null {
+	// Primary: derive from context.storageUri
+	// storageUri is <workspaceStorageRoot>/<hash>/<extensionId>/
+	// Transcripts live at: <workspaceStorageRoot>/<hash>/GitHub.copilot-chat/transcripts/
+	if (cwdOrStorageUri && typeof cwdOrStorageUri !== 'string' && 'fsPath' in cwdOrStorageUri) {
+		const storageParent = path.dirname((cwdOrStorageUri as vscode.Uri).fsPath);
+		const transcriptsDir = path.join(storageParent, 'GitHub.copilot-chat', 'transcripts');
+		if (fs.existsSync(transcriptsDir)) {
+			console.log(`[Pixel Agents] Found Copilot transcripts dir via storageUri: ${transcriptsDir}`);
+			return transcriptsDir;
+		}
+		console.log('[Pixel Agents] Transcripts dir not found at:', transcriptsDir, '— falling back to scan');
+	}
 
-	const storageRoot = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage');
+	// Fallback: scan known workspaceStorage roots
+	const workspacePath = typeof cwdOrStorageUri === 'string'
+		? cwdOrStorageUri
+		: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-	// Also try Linux / Windows paths
-	const altStorageRoots = [
-		path.join(os.homedir(), '.config', 'Code', 'User', 'workspaceStorage'), // Linux
-		path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'), // Windows
+	const allRoots = [
+		path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage'), // macOS
+		path.join(os.homedir(), '.config', 'Code', 'User', 'workspaceStorage'),                        // Linux
+		path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'),             // Windows
+		path.join(os.homedir(), '.vscode-server', 'data', 'User', 'workspaceStorage'),                 // VS Code Server
+		'/root/.vscode-server/data/User/workspaceStorage',                                             // VS Code Server (root)
 	];
-
-	const allRoots = [storageRoot, ...altStorageRoots];
 
 	for (const root of allRoots) {
 		if (!fs.existsSync(root)) continue;
 		try {
 			const entries = fs.readdirSync(root);
 			for (const entry of entries) {
-				const wsJsonPath = path.join(root, entry, 'workspace.json');
-				if (!fs.existsSync(wsJsonPath)) continue;
-				try {
-					const wsJson = JSON.parse(fs.readFileSync(wsJsonPath, 'utf-8')) as { folder?: string };
-					// The folder field is a file URI like 'file:///path/to/workspace'
-					const folderUri = wsJson.folder;
-					if (!folderUri) continue;
-					const decoded = decodeURIComponent(folderUri.replace(/^file:\/\//, ''));
-					if (decoded === workspacePath || decoded === workspacePath.replace(/\\/g, '/')) {
-						const sessionsDir = path.join(root, entry, 'chatSessions');
-						console.log(`[Pixel Agents] Found Copilot sessions dir: ${sessionsDir}`);
-						return sessionsDir;
+				const entryPath = path.join(root, entry);
+
+				// Try matching via workspace.json (traditional VS Code)
+				if (workspacePath) {
+					const wsJsonPath = path.join(entryPath, 'workspace.json');
+					if (fs.existsSync(wsJsonPath)) {
+						try {
+							const wsJson = JSON.parse(fs.readFileSync(wsJsonPath, 'utf-8')) as { folder?: string };
+							const folderUri = wsJson.folder;
+							if (folderUri) {
+								const decoded = decodeURIComponent(folderUri.replace(/^file:\/\//, ''));
+								if (decoded === workspacePath || decoded === workspacePath.replace(/\\/g, '/')) {
+									// Try new transcripts path first, then legacy chatSessions
+									const transcriptsDir = path.join(entryPath, 'GitHub.copilot-chat', 'transcripts');
+									if (fs.existsSync(transcriptsDir)) {
+										console.log(`[Pixel Agents] Found Copilot transcripts dir: ${transcriptsDir}`);
+										return transcriptsDir;
+									}
+									const legacyDir = path.join(entryPath, 'chatSessions');
+									if (fs.existsSync(legacyDir)) {
+										console.log(`[Pixel Agents] Found Copilot sessions dir (legacy): ${legacyDir}`);
+										return legacyDir;
+									}
+								}
+							}
+						} catch { /* malformed workspace.json */ }
 					}
-				} catch { /* malformed workspace.json */ }
+				}
 			}
 		} catch { /* can't read storageRoot */ }
 	}
 
 	console.log('[Pixel Agents] Could not find Copilot sessions dir for workspace:', workspacePath);
+
+	// Last resort: find the most recently active transcripts dir across all storage roots
+	// (handles VS Code Server where workspace.json doesn't exist)
+	let bestDir: string | null = null;
+	let bestMtime = 0;
+	for (const root of allRoots) {
+		if (!fs.existsSync(root)) continue;
+		try {
+			for (const entry of fs.readdirSync(root)) {
+				const transcriptsDir = path.join(root, entry, 'GitHub.copilot-chat', 'transcripts');
+				if (!fs.existsSync(transcriptsDir)) continue;
+				try {
+					const files = fs.readdirSync(transcriptsDir).filter(f => f.endsWith('.jsonl'));
+					for (const f of files) {
+						const mtime = fs.statSync(path.join(transcriptsDir, f)).mtimeMs;
+						if (mtime > bestMtime) {
+							bestMtime = mtime;
+							bestDir = transcriptsDir;
+						}
+					}
+				} catch { /* ignore */ }
+			}
+		} catch { /* ignore */ }
+	}
+	if (bestDir) {
+		console.log(`[Pixel Agents] Found Copilot transcripts dir via activity scan: ${bestDir}`);
+		return bestDir;
+	}
+
 	return null;
 }
 
@@ -168,6 +226,7 @@ export function restoreAgents(
 			sessionsDir: p.sessionsDir,
 			lastRequestCount: 0,
 			lastResponseChunkCount: 0,
+			lastLineIndex: 0,
 			activeToolIds: new Set(),
 			activeToolStatuses: new Map(),
 			activeToolNames: new Map(),
