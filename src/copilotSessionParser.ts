@@ -394,13 +394,22 @@ export function processCopilotTranscriptLine(
 
 		switch (record.type) {
 			case 'user.message': {
-				// New user prompt — reset turn state
+				// New user prompt — announce agent if first activity, then reset turn state
+				if (!agent.announcedToWebview) {
+					webview?.postMessage({ type: 'agentCreated', id: agentId });
+					agent.announcedToWebview = true;
+				}
 				cancelWaitingTimer(agentId, waitingTimers);
 				clearAgentActivity(agent, agentId, permissionTimers, webview);
 				agent.hadToolsInTurn = false;
 				break;
 			}
 			case 'assistant.turn_start': {
+				// Announce agent if first activity
+				if (!agent.announcedToWebview) {
+					webview?.postMessage({ type: 'agentCreated', id: agentId });
+					agent.announcedToWebview = true;
+				}
 				cancelWaitingTimer(agentId, waitingTimers);
 				agent.isWaiting = false;
 				webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });

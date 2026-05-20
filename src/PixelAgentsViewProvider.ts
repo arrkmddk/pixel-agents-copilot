@@ -86,8 +86,17 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 					message.folderPath as string | undefined,
 				);
 			} else if (message.type === 'focusAgent') {
-				// Open Copilot Chat panel for this agent
-				await vscode.commands.executeCommand('workbench.action.chat.open');
+				// Open the specific Copilot chat session for this agent
+				const agentId = message.id as number;
+				const focusedAgent = this.agents.get(agentId);
+				if (focusedAgent) {
+					const sessionId = path.basename(focusedAgent.sessionFile, '.jsonl');
+					const encodedId = Buffer.from(sessionId).toString('base64url');
+					const sessionUri = vscode.Uri.parse(`vscode-chat-session://local/${encodedId}`);
+					await vscode.commands.executeCommand('workbench.action.chat.open', { chatSessionResource: sessionUri });
+				} else {
+					await vscode.commands.executeCommand('workbench.action.chat.open');
+				}
 			} else if (message.type === 'closeAgent') {
 				const id = message.id as number;
 				removeAgent(

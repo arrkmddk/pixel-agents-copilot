@@ -220,13 +220,23 @@ export function restoreAgents(
 	let restoredSessionsDir: string | null = null;
 
 	for (const p of persisted) {
+		// Determine file length to skip history on restore (avoid replaying old events)
+		let restoredLineIndex = 0;
+		try {
+			if (fs.existsSync(p.sessionFile)) {
+				const raw = fs.readFileSync(p.sessionFile, 'utf-8');
+				restoredLineIndex = raw.split('\n').filter(l => l.trim()).length;
+			}
+		} catch { /* ignore */ }
+
 		const agent: AgentState = {
 			id: p.id,
 			sessionFile: p.sessionFile,
 			sessionsDir: p.sessionsDir,
 			lastRequestCount: 0,
 			lastResponseChunkCount: 0,
-			lastLineIndex: 0,
+			lastLineIndex: restoredLineIndex,
+			announcedToWebview: true, // restored agents are already shown in the webview
 			activeToolIds: new Set(),
 			activeToolStatuses: new Map(),
 			activeToolNames: new Map(),

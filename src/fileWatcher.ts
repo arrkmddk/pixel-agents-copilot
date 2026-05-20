@@ -111,7 +111,7 @@ export function ensureCopilotSessionScan(
 					adoptSessionFile(
 						f, sessionsDir, nextAgentIdRef,
 						agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers,
-						webview, persistAgents,
+						webview, persistAgents, true, // passive: skip existing history
 					);
 				}
 			} catch { /* ignore stat errors */ }
@@ -153,7 +153,7 @@ function scanForNewSessionFiles(
 			adoptSessionFile(
 				file, sessionsDir, nextAgentIdRef,
 				agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers,
-				webview, persistAgents,
+				webview, persistAgents, false, // not passive: new file, read from start
 			);
 		}
 	}
@@ -170,7 +170,17 @@ function adoptSessionFile(
 	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
 	webview: vscode.Webview | undefined,
 	persistAgents: () => void,
+	passive = false,
 ): void {
+	// For passive (startup) adoption: skip existing history so we only react to NEW events
+	let initialLineIndex = 0;
+	if (passive) {
+		try {
+			const raw = fs.readFileSync(sessionFile, 'utf-8');
+			initialLineIndex = raw.split('\n').filter(l => l.trim()).length;
+		} catch { /* ignore */ }
+	}
+
 	const id = nextAgentIdRef.current++;
 	const agent: AgentState = {
 		id,
@@ -178,7 +188,8 @@ function adoptSessionFile(
 		sessionsDir,
 		lastRequestCount: 0,
 		lastResponseChunkCount: 0,
-		lastLineIndex: 0,
+		lastLineIndex: initialLineIndex,
+		announcedToWebview: !passive,
 		activeToolIds: new Set(),
 		activeToolStatuses: new Map(),
 		activeToolNames: new Map(),
@@ -192,11 +203,15 @@ function adoptSessionFile(
 	agents.set(id, agent);
 	persistAgents();
 
-	console.log(`[Pixel Agents] Agent ${id}: adopted session ${path.basename(sessionFile)}`);
-	webview?.postMessage({ type: 'agentCreated', id });
+	console.log(`[Pixel Agents] Agent ${id}: adopted session ${path.basename(sessionFile)} (passive=${passive})`);
+	if (!passive) {
+		webview?.postMessage({ type: 'agentCreated', id });
+	}
 
 	startFileWatching(id, sessionFile, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview);
-	readSessionFile(id, agents, waitingTimers, permissionTimers, webview);
+	if (!passive) {
+		readSessionFile(id, agents, waitingTimers, permissionTimers, webview);
+	}
 }
 
 export function reassignAgentToFile(

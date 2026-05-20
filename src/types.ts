@@ -11,6 +11,8 @@ export interface AgentState {
 	lastResponseChunkCount: number;
 	/** Last processed line index for JSONL files */
 	lastLineIndex: number;
+	/** Whether agentCreated has been sent to the webview */
+	announcedToWebview: boolean;
 	activeToolIds: Set<string>;
 	activeToolStatuses: Map<string, string>;
 	activeToolNames: Map<string, string>;
