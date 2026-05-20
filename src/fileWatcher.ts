@@ -95,8 +95,8 @@ export function ensureCopilotSessionScan(
 ): void {
 	if (projectScanTimerRef.current) return;
 
-	// Seed old files as known, but adopt recently-active sessions as agents
-	const RECENT_SESSION_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+	// Seed old files as known, but passively watch only very recently-active sessions
+	const RECENT_SESSION_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 	const now = Date.now();
 	try {
 		const files = fs.readdirSync(sessionsDir)
@@ -201,7 +201,10 @@ function adoptSessionFile(
 	};
 
 	agents.set(id, agent);
-	persistAgents();
+	// Only persist agents that are announced — passive agents must earn their place
+	if (!passive) {
+		persistAgents();
+	}
 
 	console.log(`[Pixel Agents] Agent ${id}: adopted session ${path.basename(sessionFile)} (passive=${passive})`);
 	if (!passive) {

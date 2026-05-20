@@ -189,6 +189,8 @@ export function persistAgents(
 ): void {
 	const persisted: PersistedAgent[] = [];
 	for (const agent of agents.values()) {
+		// Only persist agents that are visible in the webview
+		if (!agent.announcedToWebview) continue;
 		persisted.push({
 			id: agent.id,
 			sessionFile: agent.sessionFile,
@@ -300,8 +302,9 @@ export function sendExistingAgents(
 ): void {
 	if (!webview) return;
 	const agentIds: number[] = [];
-	for (const id of agents.keys()) {
-		agentIds.push(id);
+	for (const [id, agent] of agents) {
+		// Only send agents that are visible (announced) to avoid showing passive watchers
+		if (agent.announcedToWebview) agentIds.push(id);
 	}
 	agentIds.sort((a, b) => a - b);
 

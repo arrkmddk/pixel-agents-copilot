@@ -37,7 +37,7 @@ function getActivityText(
     }
   }
 
-  return 'Idle'
+  return isActive ? 'Thinking…' : 'Idle'
 }
 
 export function ToolOverlay({
