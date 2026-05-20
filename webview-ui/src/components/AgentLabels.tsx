@@ -68,7 +68,7 @@ export function AgentLabels({
 
         const status = agentStatuses[id]
         const isWaiting = status === 'waiting'
-        const isActive = ch.isActive
+        const isActive = status === 'active'
         const isSub = ch.isSubagent
 
         let dotColor = 'transparent'

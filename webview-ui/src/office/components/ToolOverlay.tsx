@@ -40,7 +40,8 @@ function getActivityText(
   }
 
   if (agentStatus === 'waiting') return 'Done ✓'
-  return isActive ? 'Thinking…' : 'Idle'
+  if (agentStatus === 'active') return 'Thinking…'
+  return 'Idle'
 }
 
 export function ToolOverlay({

@@ -222,15 +222,9 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentStatus') {
         const id = msg.id as number
         const status = msg.status as string
-        setAgentStatuses((prev) => {
-          if (status === 'active') {
-            if (!(id in prev)) return prev
-            const next = { ...prev }
-            delete next[id]
-            return next
-          }
-          return { ...prev, [id]: status }
-        })
+        // Store 'active' explicitly so we can distinguish a genuine turn start
+        // from the default isActive=true that all characters get on creation
+        setAgentStatuses((prev) => ({ ...prev, [id]: status }))
         os.setAgentActive(id, status === 'active')
         if (status === 'waiting') {
           os.showWaitingBubble(id)
